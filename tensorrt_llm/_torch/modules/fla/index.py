@@ -12,10 +12,15 @@ from tensorrt_llm._torch.modules.fla.utils import tensor_cache
 def prepare_lens(cu_seqlens: torch.LongTensor) -> torch.LongTensor:
     return cu_seqlens[1:] - cu_seqlens[:-1]
 
+# total_calls = 0
 
-@tensor_cache
+# @tensor_cache
 def prepare_chunk_indices(cu_seqlens: torch.LongTensor,
                           chunk_size: int) -> torch.LongTensor:
+    # global total_calls
+    # total_calls += 1
+
+    # print(f'{cu_seqlens=}   {chunk_size=}   {total_calls=}')
     indices = torch.cat([
         torch.arange(n)
         for n in triton.cdiv(prepare_lens(cu_seqlens), chunk_size).tolist()

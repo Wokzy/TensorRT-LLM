@@ -166,6 +166,7 @@ def chunk_local_cumsum_scalar(
     cu_seqlens: Optional[torch.Tensor] = None,
     head_first: bool = False,
     output_dtype: Optional[torch.dtype] = torch.float,
+    prefill_chunk_indices = None,
 ) -> torch.Tensor:
     if head_first:
         B, H, T = g.shape
@@ -174,7 +175,11 @@ def chunk_local_cumsum_scalar(
     assert chunk_size == 2**(chunk_size.bit_length() -
                              1), "chunk_size must be a power of 2"
     BT = chunk_size
-    chunk_indices = (prepare_chunk_indices(cu_seqlens, BT)
+
+    # if cu_seqlens is not None:
+    #     assert (prefill_chunk_indices[BT] == prepare_chunk_indices(cu_seqlens, BT)).all()
+
+    chunk_indices = (prefill_chunk_indices[BT] #prepare_chunk_indices(cu_seqlens, BT)
                      if cu_seqlens is not None else None)
     NT = triton.cdiv(T, BT) if cu_seqlens is None else len(chunk_indices)
     g_org, g = g, torch.empty_like(g, dtype=output_dtype or g.dtype)
@@ -251,6 +256,7 @@ def chunk_local_cumsum(
     cu_seqlens: Optional[torch.Tensor] = None,
     head_first: bool = False,
     output_dtype: Optional[torch.dtype] = torch.float,
+    prefill_chunk_indices = None,
     **kwargs,
 ) -> torch.Tensor:
     if cu_seqlens is not None:
@@ -265,8 +271,10 @@ def chunk_local_cumsum(
             cu_seqlens=cu_seqlens,
             head_first=head_first,
             output_dtype=output_dtype,
+            prefill_chunk_indices=prefill_chunk_indices,
         )
     elif len(g.shape) == 4:
+        raise RuntimeError
         return chunk_local_cumsum_vector(
             g=g,
             chunk_size=chunk_size,

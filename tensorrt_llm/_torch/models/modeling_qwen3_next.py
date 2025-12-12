@@ -22,6 +22,7 @@ import torch
 import torch.nn.functional as F
 import triton
 import triton.language as tl
+
 from torch import nn
 from transformers import AutoConfig
 from transformers.configuration_utils import PretrainedConfig
@@ -30,6 +31,7 @@ from transformers.modeling_rope_utils import rope_config_validation
 from tensorrt_llm._torch.models.checkpoints.base_weight_mapper import \
     BaseWeightMapper
 from tensorrt_llm._torch.modules.fla.chunk import chunk_gated_delta_rule
+# from tensorrt_llm._torch.modules.fla.fused_recurrent import fused_recurrent_gated_delta_rule
 from tensorrt_llm._torch.modules.fla.fused_sigmoid_gating_recurrent import \
     fused_sigmoid_gating_delta_rule_update
 from tensorrt_llm._torch.modules.mamba.mamba2_metadata import Mamba2Metadata
@@ -57,6 +59,8 @@ from ..utils import AuxStreamType, EventType
 from .modeling_qwen3 import Qwen3Attention
 from .modeling_speculative import SpecDecOneEngineForCausalLM
 from .modeling_utils import DecoderModel, EagerFusionConfig, register_auto_model
+
+from tensorrt_llm._torch.modules.fla.index import prepare_chunk_indices
 
 
 def ensure_divisibility(numerator, denominator):
@@ -881,6 +885,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         self,
         conv_states,
         ssm_states,
+        prefill_chunk_indices,
         **kwargs,
     ):
         mixed_qkv = kwargs["mixed_qkv"]
@@ -987,6 +992,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             cu_seqlens=new_query_start_loc,
             head_first=False,
             use_qk_l2norm_in_kernel=True,
+            prefill_chunk_indices=prefill_chunk_indices,
         )
         last_recurrent_state = last_recurrent_state.to(ssm_states.dtype,
                                                        copy=False)
@@ -1000,6 +1006,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         attn_metadata: AttentionMetadata,
         mamba_metadata: Mamba2Metadata,
         all_reduce_params: Optional[AllReduceParams] = None,
+        prefill_chunk_indices = None,
     ):
         ### sglang linear attn
         # has_initial_states = None
@@ -1070,7 +1077,8 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             "num_decode": num_decodes,
         }
         if num_prefills > 0:
-            attn_out = self.forward_extend(conv_states, ssm_states, **kwargs)
+            # assert prefill_chunk_indices is not None
+            attn_out = self.forward_extend(conv_states, ssm_states, prefill_chunk_indices, **kwargs)
         else:
             attn_out = self.forward_decode(conv_states, ssm_states, num_decodes,
                                            mamba_metadata.cu_seqlens, **kwargs)
@@ -1452,6 +1460,48 @@ class Qwen3NextModel(DecoderModel):
 
         self.mamba_metadata: Optional[Mamba2Metadata] = None
 
+        # self._devices = {param.device for param in self.layers.parameters()}
+        # self._random_device = next(iter(self._devices))
+
+    def prepare_prefill_chunk_indices(
+        self,
+        attn_metadata: AttentionMetadata,
+    ):
+        num_prefills = attn_metadata.num_contexts
+
+        if num_prefills == 0:
+            return None
+
+        batch_size = attn_metadata.seq_lens.shape[0]
+        num_decodes = attn_metadata.seq_lens.shape[0] - num_prefills
+        query_start_loc = self.mamba_metadata.cu_seqlens[:batch_size + 1]
+
+        if num_decodes > 0:
+            decode_query_start_loc = torch.arange(
+                1, num_decodes + 1,
+                device=query_start_loc.device)  # num_decodes 个
+            decode_query_start_loc = decode_query_start_loc + query_start_loc[
+                num_prefills]
+            query_start_loc = torch.cat(
+                [query_start_loc[:num_prefills + 1], decode_query_start_loc])
+            
+        query_start_loc = query_start_loc.to(torch.long)
+
+        # res = {
+        #     self._random_device: (
+        #         prepare_chunk_indices(query_start_loc, 64),
+        #         prepare_chunk_indices(query_start_loc, 16),
+        #     )
+        # }
+
+        res =  {64: prepare_chunk_indices(query_start_loc, 64),
+                16: prepare_chunk_indices(query_start_loc, 16)}
+
+        print(f'PRECALC FINISHED {query_start_loc.shape}')
+
+        return res
+
+
     def forward(
         self,
         attn_metadata: AttentionMetadata,
@@ -1479,6 +1529,10 @@ class Qwen3NextModel(DecoderModel):
 
         hidden_states = inputs_embeds
         residual = None
+        # yegor-yershov
+        prefill_chunk_indices = self.prepare_prefill_chunk_indices(
+            attn_metadata=attn_metadata
+        )
         for decoder_layer in self.layers:
             hidden_states, residual = decoder_layer(
                 position_ids=position_ids,
@@ -1486,7 +1540,8 @@ class Qwen3NextModel(DecoderModel):
                 attn_metadata=attn_metadata,
                 residual=residual,
                 spec_metadata=spec_metadata,
-                mamba_metadata=self.mamba_metadata)
+                mamba_metadata=self.mamba_metadata,
+                prefill_chunk_indices=prefill_chunk_indices)
         return hidden_states
 
 

@@ -130,11 +130,12 @@ def chunk_fwd_o(
     scale: Optional[float] = None,
     cu_seqlens: Optional[torch.LongTensor] = None,
     chunk_size: int = 64,
+    prefill_chunk_indices = None,
 ) -> torch.Tensor:
     B, T, Hg, K, V = *q.shape, v.shape[-1]
     H = v.shape[-2]
     BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
-    chunk_indices = (prepare_chunk_indices(cu_seqlens, BT)
+    chunk_indices = (prefill_chunk_indices[BT] # prepare_chunk_indices(cu_seqlens, BT)
                      if cu_seqlens is not None else None)
     NT = triton.cdiv(T, BT) if cu_seqlens is None else len(chunk_indices)
     if scale is None:
