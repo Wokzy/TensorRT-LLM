@@ -389,7 +389,7 @@ def solve_tril(
                      device=A.device,
                      dtype=torch.float if BT != 16 else output_dtype)
 
-    chunk_indices = (prefill_chunk_indices[BT] # prepare_chunk_indices(cu_seqlens, 16)
+    chunk_indices = (prefill_chunk_indices[16] # prepare_chunk_indices(cu_seqlens, 16)
                      if cu_seqlens is not None else None)
     NT = len(chunk_indices) if cu_seqlens is not None else triton.cdiv(T, 16)
     solve_tril_16x16_kernel[NT, B * H](
