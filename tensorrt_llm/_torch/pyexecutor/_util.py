@@ -612,9 +612,8 @@ def _create_kv_cache_manager(
             config.full_attention_interval != config.full_attention_interval -
             1 else True for i in range(num_hidden_layers)
         ]
-        num_mamba_layers = num_hidden_layers // config.full_attention_interval * (
-            config.full_attention_interval - 1)
-        num_layers = num_hidden_layers - num_mamba_layers
+        num_layers = sum(layer_mask)
+        num_mamba_layers = num_hidden_layers - num_layers
         kv_cache_manager = kv_cache_manager_cls(
             # mamba cache parameters
             config.linear_key_head_dim,
