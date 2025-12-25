@@ -243,12 +243,13 @@ def chunk_gated_delta_rule_fwd_h(
     chunk_size: int = 64,  # SY: remove this argument and force chunk size 64?
     save_new_value: bool = True,
     cu_seqlens: Optional[torch.LongTensor] = None,
+    prefill_chunk_indices = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     B, T, Hg, K, V = *k.shape, u.shape[-1]
     H = u.shape[-2]
     BT = chunk_size
 
-    chunk_indices = (prepare_chunk_indices(cu_seqlens, chunk_size)
+    chunk_indices = (prefill_chunk_indices[BT] # prepare_chunk_indices(cu_seqlens, chunk_size)
                      if cu_seqlens is not None else None)
     # N: the actual number of sequences in the batch with either equal or variable lengths
     if cu_seqlens is None:
